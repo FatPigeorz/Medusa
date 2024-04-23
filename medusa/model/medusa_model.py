@@ -170,6 +170,7 @@ class MedusaModelABC(nn.Module):
     def forward(
         self,
         input_ids=None,
+        inputs_embeds=None,
         attention_mask=None,
         past_key_values=None,
         output_orig=False,
@@ -194,6 +195,7 @@ class MedusaModelABC(nn.Module):
         if not medusa_forward:
             return super().forward(
                 input_ids=input_ids,
+                inputs_embeds=inputs_embeds,
                 attention_mask=attention_mask,
                 past_key_values=past_key_values,
                 position_ids=position_ids,
@@ -203,6 +205,7 @@ class MedusaModelABC(nn.Module):
             # Pass input through the base model
             outputs = self.base_model.model(
                 input_ids=input_ids,
+                inputs_embeds=inputs_embeds,
                 attention_mask=attention_mask,
                 past_key_values=past_key_values,
                 position_ids=position_ids,
@@ -367,7 +370,6 @@ class MedusaModelABC(nn.Module):
 
             if self.tokenizer.eos_token_id in input_ids[0, input_len:]:
                 break
-
 
 class MedusaModelLlama(MedusaModelABC, KVLlamaForCausalLM):
     pass

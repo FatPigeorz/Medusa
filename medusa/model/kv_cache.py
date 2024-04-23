@@ -64,6 +64,18 @@ class KVCache:
         dst.copy_(tensor)
         self.current_length.add_(tensor.shape[dim])
         return torch.narrow(self.data, 2, 0, self.current_length)
+    
+    def pop(self, num_elements: int, dim: int = 2):
+        """
+        Remove the last `num_elements` elements from the cache.
+
+        Args:
+            num_elements (int): Number of elements to remove.
+            dim (int, optional): The dimension along which elements should be removed. Default is 2.
+        """
+        self.current_length.sub_(num_elements)
+        self.current_length.clamp_(min=0)
+        self.data.narrow(dim, self.current_length, num_elements).zero_()
 
 
 def initialize_past_key_values(model):

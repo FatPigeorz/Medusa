@@ -58,15 +58,16 @@ def main(args):
             model.current_length_data.zero_() # this is for rerun
             reset_medusa_mode(model)
             medusa_logits, outputs, logits = model(
-                input_ids, past_key_values=past_key_values, output_orig=True, medusa_forward=True
+                input_ids=input_ids, past_key_values=past_key_values, output_orig=True, medusa_forward=True
             )
             _, medusa_topk = medusa_logits[...,-1,:].topk(20, dim=-1)
             input_id = logits[:, -1:].argmax(dim=-1)
             logits_ids.append(input_id.detach().cpu())
             medusa_topk_ids.append(medusa_topk.detach().cpu())
             for _ in range(steps):
+                prev_input_len = input_ids.shape[1]
                 medusa_logits, outputs, logits = model(
-                    input_id, past_key_values=past_key_values, output_orig=True, medusa_forward=True
+                    input_ids=input_id, past_key_values=past_key_values, output_orig=True, medusa_forward=True
                 )
                 _, medusa_topk = medusa_logits[...,-1,:].topk(20, dim=-1)
                 input_id = logits[:, -1:].argmax(dim=-1)
