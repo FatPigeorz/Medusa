@@ -23,13 +23,13 @@ class MedusaConfig(PretrainedConfig):
 
     def __init__(
         self,
-        medusa_num_heads=4,
+        summary_nums=4,
         medusa_num_layers=1,
         base_model_name_or_path="lmsys/vicuna-7b-v1.3",
         **kwargs,
     ):
         super().__init__(**kwargs)
-        self.medusa_num_heads = medusa_num_heads
+        self.summary_nums = summary_nums
         self.medusa_num_layers = medusa_num_layers
         self.base_model_name_or_path = base_model_name_or_path
 
@@ -77,7 +77,7 @@ class MedusaModel(nn.Module):
     def __init__(
         self,
         base_model,
-        medusa_num_heads=4,
+        summary_nums=5,
         medusa_num_layers=1,
         base_model_name_or_path="lmsys/vicuna-7b-v1.3",
     ):
@@ -92,30 +92,18 @@ class MedusaModel(nn.Module):
         self.config = base_model.config
         self.hidden_size = base_model.config.hidden_size
         self.vocab_size = base_model.config.vocab_size
-        self.medusa = medusa_num_heads
+        self.summary_nums = summary_nums
         self.medusa_num_layers = medusa_num_layers
         self.base_model_name_or_path = base_model_name_or_path
         self.tokenizer = AutoTokenizer.from_pretrained(self.base_model_name_or_path)
         # Create a list of Medusa heads
-        self.medusa_head = nn.ModuleList(
-            [
-                nn.Sequential(
-                    *([ResBlock(self.hidden_size)] * medusa_num_layers),
-                    nn.Linear(self.hidden_size, self.vocab_size, bias=False),
-                )
-                for _ in range(medusa_num_heads)
-            ]
-        )
+        self.medusa_head = nn.Sequential(
+                *([ResBlock(self.hidden_size)] * medusa_num_layers),
+                # nn.Linear(self.hidden_size, self.vocab_size, bias=False),
+            )
 
         # Ensure medusa_head's dtype and device align with the base_model
         self.medusa_head.to(self.base_model.dtype).to(self.base_model.device)
-
-        import deepspeed
-        params = [base_model.lm_head.weight]
-        with deepspeed.zero.GatheredParameters(params):
-            for i in range(medusa_num_heads):
-                # Initialize the weights of each medusa_head using the base model's weights
-                self.medusa_head[i][-1].weight.data[:] = base_model.lm_head.weight.data[:]
 
     def get_tokenizer(self):
         """Get the tokenizer of the base model.
@@ -172,11 +160,13 @@ class MedusaModel(nn.Module):
     def forward(
         self,
         input_ids=None,
+        inputs_embeds=None,
         attention_mask=None,
         labels=None,
         past_key_values=None,
-        output_orig=False,
+        output_orig=True,
         position_ids=None,
+        medusa_forward=True,
     ):
         """Forward pass of the MedusaModel.
 
@@ -196,21 +186,21 @@ class MedusaModel(nn.Module):
             # Pass input through the base model
             outputs = self.base_model.model(
                 input_ids=input_ids,
+                inputs_embeds=inputs_embeds,
                 attention_mask=attention_mask,
                 past_key_values=past_key_values,
                 position_ids=position_ids,
             )
             if output_orig:
                 orig = self.base_model.lm_head(outputs[0])
+        if not medusa_forward:
+            return orig
         # Clone the output hidden states
         hidden_states = outputs[0].clone()
-        medusa_logits = []
-        # TODO: Consider parallelizing this loop for efficiency?
-        for i in range(self.medusa):
-            medusa_logits.append(self.medusa_head[i](hidden_states))
+        summary_vector = self.medusa_head(hidden_states)
         if output_orig:
-            return torch.stack(medusa_logits, dim=0), outputs, orig
-        return torch.stack(medusa_logits, dim=0)
+            return summary_vector, outputs, orig
+        return summary_vector
 
     def medusa_generate(
         self,
@@ -333,3 +323,4 @@ class MedusaModel(nn.Module):
 
             if self.tokenizer.eos_token_id in input_ids[0, input_len:]:
                 break
+

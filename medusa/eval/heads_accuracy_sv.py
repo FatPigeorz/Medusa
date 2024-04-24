@@ -15,18 +15,17 @@ from tqdm import tqdm
 import argparse
 import time
 
-def get_accuracy(sv_logits, target_id):
+def get_accuracy(sv_logits, target_id, k=20):
     sv_logits = sv_logits.view(-1, sv_logits.shape[-1])
     target_id = target_id.view(-1)
     # sv_logits: (samples, vocab_size)
     # target_id: (samples)
     samples = sv_logits.shape[0]
-    vocab_size = sv_logits.shape[-1]
-    accuracy = torch.zeros((vocab_size, samples))
+    accuracy = torch.zeros((k, samples))
     # for each vocab_size is the topk accuracy
     # for every element in the last dimension, is boolean, denoting whether the target_id is in the topk
-    for k in range(vocab_size):
-        topk = torch.topk(sv_logits, k + 1, dim=-1).indices
+    for i in range(k):
+        topk = torch.topk(sv_logits, i + 1, dim=-1).indices
         accuracy[k] = torch.any(topk == target_id.unsqueeze(1), dim=-1)
     return accuracy
 
@@ -55,7 +54,7 @@ def main(args):
     actual_logits = []
 
 
-    for sample in tqdm(data):
+    for sample in tqdm(data[:500]):
         conv = get_conversation_template("vicuna")
         conv.messages = []
         conv.append_message(conv.roles[0], sample["instruction"])
@@ -78,6 +77,8 @@ def main(args):
                 input_ids=input_ids, past_key_values=past_key_values, output_orig=True, medusa_forward=True
             )
             medusa_logits = medusa_logits[...,-1,:] # (num_heads, bs, vocab_size)
+            # predict position: 1 + prophet_gemma + 1
+            medusa_logits = medusa_logits[:args.prophet_gemma, ...]
             logits = logits[:, -1,:].unsqueeze(0) # (1, bs, vocab_size)
             sv_logits = torch.cat([logits, medusa_logits], dim=0)
             input_id = logits[:, -1:, :].argmax(dim=-1)
@@ -91,6 +92,7 @@ def main(args):
                     input_ids=input_id, past_key_values=past_key_values, output_orig=True, medusa_forward=True
                 )
                 medusa_logits = medusa_logits[...,-1,:]
+                medusa_logits = medusa_logits[:args.prophet_gemma, ...]
                 logits = logits[:,-1,:].unsqueeze(0)
                 sv_logits = torch.cat([logits, medusa_logits], dim=0)
                 sv_embeds = (F.softmax(sv_logits, dim=-1) @ embedding).transpose(0, 1)
@@ -147,6 +149,9 @@ if __name__ == "__main__":
                         help="Name of the model.")
     parser.add_argument("--medusa_num_heads", type=int, default=5,
                         help="Number of medusa heads.")
+    # predict position is t + 1 + prophet_gemma + 1
+    # if prophet
+    parser.add_argument("--prophet-gemma", type=int, default=2)
     parser.add_argument("--data_path", type=str, required=True,
                         help="Path to the evaluation data in JSON format.")
     parser.add_argument("--save_dir", type=str, default="../../data",

@@ -108,19 +108,15 @@ class MedusaModelABC(nn.Module):
         self.base_model_name_or_path = base_model_name_or_path
         self.tokenizer = AutoTokenizer.from_pretrained(self.base_model_name_or_path)
         # Create a list of Medusa heads
-        self.medusa_head = nn.ModuleList(
-            [
-                nn.Sequential(
+        self.medusa_head = nn.Sequential(
                     *([ResBlock(self.hidden_size)] * medusa_num_layers),
-                    nn.Linear(self.hidden_size, self.vocab_size, bias=False),
+                    # nn.Linear(self.hidden_size, self.vocab_size, bias=False),
                 )
-                for _ in range(medusa_num_heads)
-            ]
-        )
     # Add a link named base_model to self
     @property
     def base_model(self):
         return self
+        
     @classmethod
     def from_pretrained(
         cls,
@@ -140,7 +136,6 @@ class MedusaModelABC(nn.Module):
         except:
             config = MedusaConfig.from_pretrained(pretrained_model_name_or_path)
             base_model_config = AutoConfig.from_pretrained(config.base_model_name_or_path)
-            base_model_config.medusa_num_heads = 5 # TODO: fix the uploaded config (only include 2 heads)
             base_model_config.medusa_num_layers = config.medusa_num_layers
             model = super().from_pretrained(
                 config.base_model_name_or_path,
@@ -216,12 +211,11 @@ class MedusaModelABC(nn.Module):
         # Clone the output hidden states
         hidden_states = outputs[0].clone()
         medusa_logits = []
-        # TODO: Consider parallelizing this loop for efficiency?
-        for i in range(self.medusa):
-            medusa_logits.append(self.medusa_head[i](hidden_states))
+        summary_vector = self.medusa_head(hidden_states)
         if output_orig:
-            return torch.stack(medusa_logits, dim=0), outputs, orig
+            return summary_vector, outputs, orig
         return torch.stack(medusa_logits, dim=0)
+
     def get_medusa_choice(self, model_name):
         if 'vicuna' in model_name:
             if '7b' in model_name:

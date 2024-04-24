@@ -57,38 +57,33 @@ class CustomizedTrainer(Trainer):
         """
         # DDP will give us model.module
         if hasattr(model, "module"):
-            medusa = model.module.medusa
+            summary_nums = model.module.summary_nums
         else:
-            medusa = model.medusa
+            summary_nums = model.summary_nums
 
-        logits = model(
-            input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"]
+        summary_vector, _, original_logits = model(
+            input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], output_orig=True
         )
+
+        inputs_embeds = model.base_model.get_input_embeddings()(inputs["input_ids"])
+        inputs_embeds = torch.cat([inputs_embeds, summary_vector], dim=1)
+        with torch.inference_mode():
+            batch_size = summary_vector.shape[0]
+            attention_mask = inputs["attention_mask"]
+            device = inputs["attention_mask"].device
+            extra_mask = torch.ones((batch_size, 1), device=device)
+            attention_mask = torch.cat([attention_mask, extra_mask], dim=-1)
+            logits = model(
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                medusa_forward=False,
+            )
+
         labels = inputs["labels"]
-        # Shift so that tokens < n predict n
-        loss = 0
+        # shift labels to align with summary vector
+        labels = labels[:, summary_nums:, :]
         loss_fct = CrossEntropyLoss()
-        log = {}
-        for i in range(medusa):
-            medusa_logits = logits[i, :, : -(2 + i)].contiguous()
-            medusa_labels = labels[..., 2 + i :].contiguous()
-            medusa_logits = medusa_logits.view(-1, logits.shape[-1])
-            medusa_labels = medusa_labels.view(-1)
-            medusa_labels = medusa_labels.to(medusa_logits.device)
-            loss_i = loss_fct(medusa_logits, medusa_labels)
-            loss += loss_i
-            not_ignore = medusa_labels.ne(IGNORE_TOKEN_ID)
-            medusa_labels = medusa_labels[not_ignore]
-
-            # Add top-k accuracy
-            for k in range(1, 2):
-                _, topk = medusa_logits.topk(k, dim=-1)
-                topk = topk[not_ignore]
-                correct = topk.eq(medusa_labels.unsqueeze(-1)).any(-1)
-                log[f"medusa{i}_top{k}"] = correct.float().mean().item()
-
-            log[f"medusa{i}_loss"] = loss_i.item()
-        self.log(log)
+        loss = loss_fct(logits.view(-1, logits.size(-1)), labels.view(-1))
         return (loss, logits) if return_outputs else loss
 
 
@@ -350,13 +345,13 @@ def train():
     # Add Medusa heads
     medusa_lm_head = MedusaModel(
         model,
-        medusa_num_heads=training_args.medusa_num_heads,
+        summary_nums=training_args.medusa_num_heads,
         medusa_num_layers=training_args.medusa_num_layers,
         base_model_name_or_path=model_args.model_name_or_path,
     )
 
     # Format output dir
-    training_args.output_dir = f"{training_args.output_dir}_medusa_mlp_{model_args.model_name_or_path.split('/')[-1]}_medusa_{training_args.medusa_num_heads}_lr_{training_args.learning_rate}_layers_{training_args.medusa_num_layers}"
+    training_args.output_dir = f"{training_args.output_dir}_summary_{training_args.summary_nums}_layers_{training_args.medusa_num_layers}"
 
     tokenizer = transformers.AutoTokenizer.from_pretrained(
         model_args.model_name_or_path,
@@ -372,7 +367,7 @@ def train():
 
     # Generate Medusa config for pushing to HF hub
     medusa_config = MedusaConfig(
-        medusa_num_heads=training_args.medusa_num_heads,
+        summary_nums=training_args.summary_nums,
         medusa_num_layers=training_args.medusa_num_layers,
         base_model_name_or_path=model_args.model_name_or_path,
     )
