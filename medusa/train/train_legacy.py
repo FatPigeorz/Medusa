@@ -83,7 +83,17 @@ class CustomizedTrainer(Trainer):
         # shift labels to align with summary vector
         labels = labels[:, summary_nums:, :]
         loss_fct = CrossEntropyLoss()
-        loss = loss_fct(logits.view(-1, logits.size(-1)), labels.view(-1))
+        loss = loss_fct(logits.view(-1, logits.shape[-1]), labels.view(-1))
+        log = {}
+        log["loss"] = loss.item()
+        not_ignore = labels.ne(IGNORE_TOKEN_ID) 
+        logits = logits[not_ignore]
+        for k in range(10):
+            _, topk = logits.topk(k + 1, dim=-1)
+            topk = topk[not_ignore]
+            correct = topk.eq(labels.unsqueeze(-1)).any(-1)
+            log[f"top{k}"] = correct.float().mean().item()
+        self.log(log)
         return (loss, logits) if return_outputs else loss
 
 
@@ -123,8 +133,8 @@ class TrainingArguments(transformers.TrainingArguments):
             "help": "Maximum sequence length. Sequences will be right padded (and possibly truncated)."
         },
     )
-    medusa_num_heads: int = field(
-        default=1,
+    summary_nums: int = field(
+        default=4,
         metadata={"help": "Number of Medusa heads."},
     )
     medusa_num_layers: int = field(
@@ -345,7 +355,7 @@ def train():
     # Add Medusa heads
     medusa_lm_head = MedusaModel(
         model,
-        summary_nums=training_args.medusa_num_heads,
+        summary_nums=training_args.summary_nums,
         medusa_num_layers=training_args.medusa_num_layers,
         base_model_name_or_path=model_args.model_name_or_path,
     )
